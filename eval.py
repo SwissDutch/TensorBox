@@ -84,7 +84,7 @@ def run_eval(H, checkpoint_dir , hypes_file, output_path):
     trueanno = al.AnnoList()
 
     #shuffle true_annos to randomize plottet Images
-    #shuffle(true_annos)
+    shuffle(true_annos)
 
     for i in range(len(true_annos)):
       true_anno = true_annos[i]
