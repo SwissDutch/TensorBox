@@ -7,6 +7,9 @@ import numpy as np
 import copy
 import annolist.AnnotationLib as al
 
+import scipy as scp
+import scipy.misc
+
 def annotation_to_h5(H, a, cell_width, cell_height, max_len):
     region_size = H['region_size']
     assert H['region_size'] == H['image_height'] / H['grid_height']
@@ -110,7 +113,7 @@ def annotation_jitter(I, a_in, min_box_width=20, jitter_scale_min=0.9, jitter_sc
             for p in r.point:
                 p.x = I.shape[1] - p.x
 
-    I1 = cv2.resize(I, None, fx=jitter_scale, fy=jitter_scale, interpolation = cv2.INTER_CUBIC)
+    I1 = scp.misc.imresize(I, jitter_scale, interp='cubic')
 
     jitter_offset_x = np.random.random_integers(-jitter_offset, jitter_offset)
     jitter_offset_y = np.random.random_integers(-jitter_offset, jitter_offset)

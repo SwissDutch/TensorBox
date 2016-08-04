@@ -10,7 +10,6 @@ from utils import googlenet_load
 from utils.annolist import AnnotationLib as al
 from utils.train_utils import add_rectangles, rescale_boxes
 
-import cv2
 import argparse
 
 def get_image_dir(args):
