@@ -19,11 +19,15 @@ from tensorflow.python.ops import array_ops
 random.seed(0)
 np.random.seed(0)
 
+import data_input
+
 from utils import train_utils, googlenet_load
+
 
 @ops.RegisterGradient("Hungarian")
 def _hungarian_grad(op, *args):
     return map(array_ops.zeros_like, op.inputs)
+
 
 def build_lstm_inner(H, lstm_input):
     '''
@@ -420,14 +424,8 @@ def train(H, test_images):
     q = {}
     enqueue_op = {}
     for phase in ['train', 'test']:
-        dtypes = [tf.float32, tf.float32, tf.float32]
-        grid_size = H['grid_width'] * H['grid_height']
-        shapes = (
-            [H['image_height'], H['image_width'], 3],
-            [grid_size, H['rnn_len'], H['num_classes']],
-            [grid_size, H['rnn_len'], 4],
-            )
-        q[phase] = tf.FIFOQueue(capacity=30, dtypes=dtypes, shapes=shapes)
+        q[phase] = data_input.create_queues(H, phase)
+        
         enqueue_op[phase] = q[phase].enqueue((x_in, confs_in, boxes_in))
 
     def make_feed(d):
@@ -451,7 +449,7 @@ def train(H, test_images):
         tf.train.start_queue_runners(sess=sess)
         for phase in ['train', 'test']:
             # enqueue once manually to avoid thread start delay
-            gen = train_utils.load_data_gen(H, phase, jitter=H['solver']['use_jitter'])
+            gen = data_input._load_data_gen(H, phase, jitter=H['solver']['use_jitter'])
             d = gen.next()
             sess.run(enqueue_op[phase], feed_dict=make_feed(d))
             t = tf.train.threading.Thread(target=thread_loop,
