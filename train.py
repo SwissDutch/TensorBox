@@ -20,6 +20,8 @@ random.seed(0)
 np.random.seed(0)
 
 import data_input
+import encoder
+import optimizer
 
 from utils import train_utils, googlenet_load
 
@@ -114,16 +116,17 @@ def rezoom(H, pred_boxes, early_feat, early_feat_channels, w_offsets, h_offsets)
                        H['rnn_len'],
                        len(w_offsets) * len(h_offsets) * early_feat_channels])
 
-def build_forward(H, x, googlenet, phase, reuse):
+def build_forward(H, x, phase, reuse):
     '''
     Construct the forward model
     '''
+    # Build Logits
+    cnn, early_feat, _ = encoder.inference(H, x)
 
     grid_size = H['grid_width'] * H['grid_height']
     outer_size = grid_size * H['batch_size']
-    input_mean = 117.
-    x -= input_mean
-    cnn, early_feat, _ = googlenet_load.model(x, googlenet, H)
+
+
     early_feat_channels = H['early_feat_channels']
     early_feat = early_feat[:, :, :, :early_feat_channels]
     
@@ -226,7 +229,7 @@ def build_forward(H, x, googlenet, phase, reuse):
 
     return pred_boxes, pred_logits, pred_confidences
 
-def build_forward_backward(H, x, googlenet, phase, boxes, flags):
+def build_forward_backward(H, x, phase, boxes, flags):
     '''
     Call build_forward() and then setup the loss functions
     '''
@@ -234,11 +237,13 @@ def build_forward_backward(H, x, googlenet, phase, boxes, flags):
     grid_size = H['grid_width'] * H['grid_height']
     outer_size = grid_size * H['batch_size']
     reuse = {'train': None, 'test': True}[phase]
+
     if H['use_rezoom']:
         (pred_boxes, pred_logits,
-         pred_confidences, pred_confs_deltas, pred_boxes_deltas) = build_forward(H, x, googlenet, phase, reuse)
+         pred_confidences, pred_confs_deltas, pred_boxes_deltas) = build_forward(H, x, phase, reuse)
     else:
-        pred_boxes, pred_logits, pred_confidences = build_forward(H, x, googlenet, phase, reuse)
+        pred_boxes, pred_logits, pred_confidences = build_forward(H, x, phase, reuse)
+
     with tf.variable_scope('decoder', reuse={'train': None, 'test': True}[phase]):
         outer_boxes = tf.reshape(boxes, [outer_size, H['rnn_len'], 4])
         outer_flags = tf.cast(tf.reshape(flags, [outer_size, H['rnn_len']]), 'int32')
@@ -304,27 +309,15 @@ def build(H, q):
     optimizers, and summary statistics.
     '''
     arch = H
-    solver = H["solver"]
 
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(solver['gpu'])
-
-    #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
     gpu_options = tf.GPUOptions()
     config = tf.ConfigProto(gpu_options=gpu_options)
-
-    encoder_net = googlenet_load.init(H, config)
+    encoder_net = None
 
     learning_rate = tf.placeholder(tf.float32)
-    if solver['opt'] == 'RMS':
-        opt = tf.train.RMSPropOptimizer(learning_rate=learning_rate,
-                                        decay=0.9, epsilon=solver['epsilon'])
-    elif solver['opt'] == 'Adam':
-        opt = tf.train.AdamOptimizer(learning_rate=learning_rate,
-                                        epsilon=solver['epsilon'])
-    elif solver['opt'] == 'SGD':
-        opt = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
-    else:
-        raise ValueError('Unrecognized opt type')
+
+
+
     loss, accuracy, confidences_loss, boxes_loss = {}, {}, {}, {}
     for phase in ['train', 'test']:
         # generate predictions and losses from forward pass
@@ -334,9 +327,10 @@ def build(H, q):
 
         grid_size = H['grid_width'] * H['grid_height']
 
+        
         (pred_boxes, pred_confidences,
          loss[phase], confidences_loss[phase],
-         boxes_loss[phase]) = build_forward_backward(H, x, encoder_net, phase, boxes, flags)
+         boxes_loss[phase]) = build_forward_backward(H, x, phase, boxes, flags)
         pred_confidences_r = tf.reshape(pred_confidences, [H['batch_size'], grid_size, H['rnn_len'], arch['num_classes']])
         pred_boxes_r = tf.reshape(pred_boxes, [H['batch_size'], grid_size, H['rnn_len'], 4])
 
@@ -347,13 +341,8 @@ def build(H, q):
 
         if phase == 'train':
             global_step = tf.Variable(0, trainable=False)
+            train_op = optimizer.training(H, loss['train'], global_step, learning_rate)
 
-            tvars = tf.trainable_variables()
-            if H['clip_norm'] <= 0:
-                grads = tf.gradients(loss['train'], tvars)
-            else:
-                grads, norm = tf.clip_by_global_norm(tf.gradients(loss['train'], tvars), H['clip_norm'])
-            train_op = opt.apply_gradients(zip(grads, tvars), global_step=global_step)
         elif phase == 'test':
             moving_avg = tf.train.ExponentialMovingAverage(0.95)
             smooth_op = moving_avg.apply([accuracy['train'], accuracy['test'],
@@ -418,23 +407,10 @@ def train(H, test_images):
     with open(H['save_dir'] + '/hypes.json', 'w') as f:
         json.dump(H, f, indent=4)
 
-    x_in = tf.placeholder(tf.float32)
-    confs_in = tf.placeholder(tf.float32)
-    boxes_in = tf.placeholder(tf.float32)
     q = {}
     enqueue_op = {}
     for phase in ['train', 'test']:
         q[phase] = data_input.create_queues(H, phase)
-        
-        enqueue_op[phase] = q[phase].enqueue((x_in, confs_in, boxes_in))
-
-    def make_feed(d):
-        return {x_in: d['image'], confs_in: d['confs'], boxes_in: d['boxes'],
-                learning_rate: H['solver']['learning_rate']}
-
-    def thread_loop(sess, enqueue_op, phase, gen):
-        for d in gen:
-            sess.run(enqueue_op[phase], feed_dict=make_feed(d))
 
     (config, loss, accuracy, summary_op, train_op,
      smooth_op, global_step, learning_rate, encoder_net) = build(H, q)
@@ -449,13 +425,7 @@ def train(H, test_images):
         tf.train.start_queue_runners(sess=sess)
         for phase in ['train', 'test']:
             # enqueue once manually to avoid thread start delay
-            gen = data_input._load_data_gen(H, phase, jitter=H['solver']['use_jitter'])
-            d = gen.next()
-            sess.run(enqueue_op[phase], feed_dict=make_feed(d))
-            t = tf.train.threading.Thread(target=thread_loop,
-                                          args=(sess, enqueue_op, phase, gen))
-            t.daemon = True
-            t.start()
+            data_input.start_enqueuing_threads(H, q[phase], phase, sess)
 
         tf.set_random_seed(H['solver']['rnd_seed'])
         sess.run(tf.initialize_all_variables())
@@ -518,6 +488,7 @@ def main():
         H = json.load(f)
     if args.gpu is not None:
         H['solver']['gpu'] = args.gpu
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(H['solver']['gpu'])
     if len(H.get('exp_name', '')) == 0:
         H['exp_name'] = args.hypes.split('/')[-1].replace('.json', '')
     H['save_dir'] = args.logdir + '/%s_%s' % (H['exp_name'],
