@@ -316,16 +316,7 @@ def build(H, q):
     encoder_net = googlenet_load.init(H, config)
 
     learning_rate = tf.placeholder(tf.float32)
-    if solver['opt'] == 'RMS':
-        opt = tf.train.RMSPropOptimizer(learning_rate=learning_rate,
-                                        decay=0.9, epsilon=solver['epsilon'])
-    elif solver['opt'] == 'Adam':
-        opt = tf.train.AdamOptimizer(learning_rate=learning_rate,
-                                        epsilon=solver['epsilon'])
-    elif solver['opt'] == 'SGD':
-        opt = tf.train.GradientDescentOptimizer(learning_rate=learning_rate)
-    else:
-        raise ValueError('Unrecognized opt type')
+
     loss, accuracy, confidences_loss, boxes_loss = {}, {}, {}, {}
     for phase in ['train', 'test']:
         # generate predictions and losses from forward pass
@@ -349,12 +340,9 @@ def build(H, q):
         if phase == 'train':
             global_step = tf.Variable(0, trainable=False)
 
-            tvars = tf.trainable_variables()
-            if H['clip_norm'] <= 0:
-                grads = tf.gradients(loss['train'], tvars)
-            else:
-                grads, norm = tf.clip_by_global_norm(tf.gradients(loss['train'], tvars), H['clip_norm'])
-            train_op = opt.apply_gradients(zip(grads, tvars), global_step=global_step)
+            train_op = optimizer.training(H, loss,
+                                          global_step, learning_rate)
+
         elif phase == 'test':
             moving_avg = tf.train.ExponentialMovingAverage(0.95)
             smooth_op = moving_avg.apply([accuracy['train'], accuracy['test'],
