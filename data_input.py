@@ -153,3 +153,11 @@ def start_enqueuing_threads(hypes, q, phase, sess):
                                   args=(sess, enqueue_op, gen))
     t.daemon = True
     t.start()
+
+
+def inputs(hypes, q):
+
+    image, confidences, boxes = q.dequeue_many(hypes['batch_size'])
+    flags = tf.argmax(confidences, 3)
+
+    return image, (flags, confidences, boxes)
