@@ -20,6 +20,8 @@ random.seed(0)
 np.random.seed(0)
 
 import data_input
+# import encoder
+# import optimizer
 
 from utils import train_utils, googlenet_load
 
@@ -398,8 +400,8 @@ def build(H, q):
             true_log_img = tf.py_func(log_image,
                                       [test_image, test_true_confidences, test_true_boxes, global_step, 'true'],
                                       [tf.float32])
-            tf.image_summary(phase + '/pred_boxes', tf.pack(pred_log_img),max_images=10)
-            tf.image_summary(phase + '/true_boxes', tf.pack(true_log_img),max_images=10)
+            tf.image_summary(phase + '/pred_boxes', pred_log_img)
+            tf.image_summary(phase + '/true_boxes', true_log_img)
 
     summary_op = tf.merge_all_summaries()
 
@@ -418,23 +420,10 @@ def train(H, test_images):
     with open(H['save_dir'] + '/hypes.json', 'w') as f:
         json.dump(H, f, indent=4)
 
-    x_in = tf.placeholder(tf.float32)
-    confs_in = tf.placeholder(tf.float32)
-    boxes_in = tf.placeholder(tf.float32)
     q = {}
     enqueue_op = {}
     for phase in ['train', 'test']:
         q[phase] = data_input.create_queues(H, phase)
-        
-        enqueue_op[phase] = q[phase].enqueue((x_in, confs_in, boxes_in))
-
-    def make_feed(d):
-        return {x_in: d['image'], confs_in: d['confs'], boxes_in: d['boxes'],
-                learning_rate: H['solver']['learning_rate']}
-
-    def thread_loop(sess, enqueue_op, phase, gen):
-        for d in gen:
-            sess.run(enqueue_op[phase], feed_dict=make_feed(d))
 
     (config, loss, accuracy, summary_op, train_op,
      smooth_op, global_step, learning_rate, encoder_net) = build(H, q)
@@ -449,13 +438,7 @@ def train(H, test_images):
         tf.train.start_queue_runners(sess=sess)
         for phase in ['train', 'test']:
             # enqueue once manually to avoid thread start delay
-            gen = data_input._load_data_gen(H, phase, jitter=H['solver']['use_jitter'])
-            d = gen.next()
-            sess.run(enqueue_op[phase], feed_dict=make_feed(d))
-            t = tf.train.threading.Thread(target=thread_loop,
-                                          args=(sess, enqueue_op, phase, gen))
-            t.daemon = True
-            t.start()
+            data_input.start_enqueuing_threads(H, q[phase], phase, sess)
 
         tf.set_random_seed(H['solver']['rnd_seed'])
         sess.run(tf.initialize_all_variables())
@@ -518,6 +501,7 @@ def main():
         H = json.load(f)
     if args.gpu is not None:
         H['solver']['gpu'] = args.gpu
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(H['solver']['gpu'])
     if len(H.get('exp_name', '')) == 0:
         H['exp_name'] = args.hypes.split('/')[-1].replace('.json', '')
     H['save_dir'] = args.logdir + '/%s_%s' % (H['exp_name'],

@@ -128,37 +128,28 @@ def create_queues(hypes, phase):
     return q
 
 
-def start_enqueuing_threads(hypes, q, phase, sess, data_dir):
+def start_enqueuing_threads(hypes, q, phase, sess):
     """Start enqueuing threads."""
-    shape = [hypes['arch']['image_height'], hypes['arch']['image_width'],
-             hypes['arch']['num_channels']]
-    image_pl = tf.placeholder(tf.float32)
 
-    # Labels
-    shape = [hypes['arch']['image_height'], hypes['arch']['image_width'],
-             hypes['arch']['num_classes']]
-    label_pl = tf.placeholder(tf.int32)
+    # Creating Placeholder for the Queue
+    x_in = tf.placeholder(tf.float32)
+    confs_in = tf.placeholder(tf.float32)
+    boxes_in = tf.placeholder(tf.float32)
 
-    def make_feed(data):
-        image, label = data
-        return {image_pl: image, label_pl: label}
+    # Creating Enqueue OP
+    enqueue_op = q.enqueue((x_in, confs_in, boxes_in))
 
-    def enqueue_loop(sess, enqueue_op, phase, gen):
-        # infinity loop enqueueing data
+    def make_feed(d):
+        return {x_in: d['image'], confs_in: d['confs'], boxes_in: d['boxes']}
+
+    def thread_loop(sess, enqueue_op, gen):
         for d in gen:
             sess.run(enqueue_op, feed_dict=make_feed(d))
 
-    threads = []
-    enqueue_op = q.enqueue((image_pl, label_pl))
-    # gen = _make_data_gen(hypes, phase, data_dir)
-    # gen.next()
-    # sess.run(enqueue_op, feed_dict=make_feed(data))
-    if phase == 'val':
-        num_threads = 1
-    else:
-        num_threads = hypes["solver"]["threads"]
-    for i in range(num_threads):
-        threads.append(tf.train.threading.Thread(target=enqueue_loop,
-                                                 args=(sess, enqueue_op,
-                                                       phase, )))
-    threads[-1].start()
+    gen = _load_data_gen(hypes, phase, jitter=hypes['solver']['use_jitter'])
+    d = gen.next()
+    sess.run(enqueue_op, feed_dict=make_feed(d))
+    t = tf.train.threading.Thread(target=thread_loop,
+                                  args=(sess, enqueue_op, gen))
+    t.daemon = True
+    t.start()
