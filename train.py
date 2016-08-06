@@ -20,7 +20,7 @@ random.seed(0)
 np.random.seed(0)
 
 import data_input
-# import encoder
+import encoder
 # import optimizer
 
 from utils import train_utils, googlenet_load
@@ -123,9 +123,8 @@ def build_forward(H, x, googlenet, phase, reuse):
 
     grid_size = H['grid_width'] * H['grid_height']
     outer_size = grid_size * H['batch_size']
-    input_mean = 117.
-    x -= input_mean
-    cnn, early_feat, _ = googlenet_load.model(x, googlenet, H)
+
+    cnn, early_feat, _ = encoder.inference(H, x, googlenet)
     early_feat_channels = H['early_feat_channels']
     early_feat = early_feat[:, :, :, :early_feat_channels]
     
