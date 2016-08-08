@@ -165,11 +165,15 @@ def build(H, q):
 
     learning_rate = tf.placeholder(tf.float32)
 
+    labels, decoded_logits, losses, images = {}, {}, {}, {}
     loss, accuracy, confidences_loss, boxes_loss = {}, {}, {}, {}
     for phase in ['train', 'test']:
         # generate predictions and losses from forward pass
         x, confidences, boxes = q[phase].dequeue_many(arch['batch_size'])
         flags = tf.argmax(confidences, 3)
+
+        labels[phase] = flags, confidences, boxes
+        images[phase] = x
 
 
         grid_size = H['grid_width'] * H['grid_height']
@@ -179,6 +183,9 @@ def build(H, q):
          boxes_loss[phase]) = build_forward_backward(H, x, encoder_net, phase, boxes, flags)
         pred_confidences_r = tf.reshape(pred_confidences, [H['batch_size'], grid_size, H['rnn_len'], arch['num_classes']])
         pred_boxes_r = tf.reshape(pred_boxes, [H['batch_size'], grid_size, H['rnn_len'], 4])
+
+        losses[phase] = loss[phase], confidences_loss[phase], boxes_loss[phase]
+        decoded_logits[phase] = pred_confidences, pred_boxes
 
 
         # Set up summary operations for tensorboard
@@ -191,52 +198,9 @@ def build(H, q):
             train_op = optimizer.training(H, loss['train'],
                                           global_step, learning_rate)
 
-        elif phase == 'test':
-            moving_avg = tf.train.ExponentialMovingAverage(0.95)
-            smooth_op = moving_avg.apply([accuracy['train'], accuracy['test'],
-                                          confidences_loss['train'], boxes_loss['train'],
-                                          confidences_loss['test'], boxes_loss['test'],
-                                          ])
+    accuracy, smooth_op = objective.evaluation(H, images,
+             labels, decoded_logits, losses, global_step)
 
-            for p in ['train', 'test']:
-                tf.scalar_summary('%s/accuracy' % p, accuracy[p])
-                tf.scalar_summary('%s/accuracy/smooth' % p, moving_avg.average(accuracy[p]))
-                tf.scalar_summary("%s/confidences_loss" % p, confidences_loss[p])
-                tf.scalar_summary("%s/confidences_loss/smooth" % p,
-                    moving_avg.average(confidences_loss[p]))
-                tf.scalar_summary("%s/regression_loss" % p, boxes_loss[p])
-                tf.scalar_summary("%s/regression_loss/smooth" % p,
-                    moving_avg.average(boxes_loss[p]))
-
-        if phase == 'test':
-            test_image = x
-            # show ground truth to verify labels are correct
-            test_true_confidences = confidences[0, :, :, :]
-            test_true_boxes = boxes[0, :, :, :]
-
-            # show predictions to visualize training progress
-            test_pred_confidences = pred_confidences_r[0, :, :, :]
-            test_pred_boxes = pred_boxes_r[0, :, :, :]
-
-            def log_image(np_img, np_confidences, np_boxes, np_global_step, pred_or_true):
-                
-                merged = train_utils.add_rectangles(H, np_img, np_confidences, np_boxes,
-                                                    use_stitching=True,
-                                                    rnn_len=H['rnn_len'])[0]
-                
-                num_images = 10
-                img_path = os.path.join(H['save_dir'], '%s_%s.jpg' % ((np_global_step / H['logging']['display_iter']) % num_images, pred_or_true))
-                misc.imsave(img_path, merged)
-                return merged
-
-            pred_log_img = tf.py_func(log_image,
-                                      [test_image, test_pred_confidences, test_pred_boxes, global_step, 'pred'],
-                                      [tf.float32])
-            true_log_img = tf.py_func(log_image,
-                                      [test_image, test_true_confidences, test_true_boxes, global_step, 'true'],
-                                      [tf.float32])
-            tf.image_summary(phase + '/pred_boxes', pred_log_img)
-            tf.image_summary(phase + '/true_boxes', true_log_img)
 
     summary_op = tf.merge_all_summaries()
 
@@ -285,7 +249,7 @@ def train(H, test_images):
 
         # train model for N iterations
         start = time.time()
-        max_iter = H['solver'].get('max_iter', 10000000)
+        max_iter = H['solver'].get('max_iter', 500)
         for i in xrange(max_iter):
             display_iter = H['logging']['display_iter']
             adjusted_lr = (H['solver']['learning_rate'] *

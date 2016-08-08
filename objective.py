@@ -388,11 +388,14 @@ def evaluation(hyp, images, labels, decoded_logits, losses, global_step):
         flags, confidences, boxes = labels[phase]
         loss[phase], confidences_loss[phase], boxes_loss[phase] = losses[phase]
 
+        pred_confidences, pred_boxes = decoded_logits[phase]
+        """
         if hyp['use_rezoom']:
             (pred_boxes, pred_logits, pred_confidences,
              pred_confs_deltas, pred_boxes_deltas) = decoded_logits[phase]
         else:
             pred_boxes, pred_logits, pred_confidences = decoded_logits[phase]
+        """
 
         grid_size = hyp['grid_width'] * hyp['grid_height']
 
@@ -447,10 +450,12 @@ def evaluation(hyp, images, labels, decoded_logits, losses, global_step):
                                             rnn_len=hyp['rnn_len'])[0]
 
         num_images = 10
+
         filename = '%s_%s.jpg' % \
-            ((np_global_step / hyp['logging']['display_iter'])
+            ((np_global_step // hyp['logging']['display_iter'])
                 % num_images, pred_or_true)
         img_path = os.path.join(hyp['save_dir'], filename)
+
         scp.misc.imsave(img_path, merged)
         return merged
 
