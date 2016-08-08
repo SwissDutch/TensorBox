@@ -21,7 +21,7 @@ np.random.seed(0)
 
 import data_input
 import encoder
-# import optimizer
+import optimizer
 
 from utils import train_utils, googlenet_load
 
@@ -340,7 +340,7 @@ def build(H, q):
         if phase == 'train':
             global_step = tf.Variable(0, trainable=False)
 
-            train_op = optimizer.training(H, loss,
+            train_op = optimizer.training(H, loss['train'],
                                           global_step, learning_rate)
 
         elif phase == 'test':
