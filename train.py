@@ -141,14 +141,8 @@ def build_forward_backward(H, x, googlenet, phase, boxes, flags):
     decoded_logits = build_forward(H, x, googlenet, phase, reuse)
     labels = flags, None, boxes
 
-    losses = objective.loss(H, decoded_logits, labels, phase)
-
-    loss, confidences_loss, boxes_loss = losses
-    if H['use_rezoom']:
-        (pred_boxes, pred_logits, pred_confidences,
-         pred_confs_deltas, pred_boxes_deltas) = decoded_logits
-    else:
-        pred_boxes, pred_logits, pred_confidences = decoded_logits
+    pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss \
+     = objective.loss(H, decoded_logits, labels, phase)
 
 
     return pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss

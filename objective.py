@@ -375,7 +375,7 @@ def loss(hypes, decoded_logits, labels, phase):
     else:
         loss = confidences_loss + boxes_loss
 
-    return loss, confidences_loss, boxes_loss
+    return pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss
 
 
 def evaluation(hyp, images, labels, decoded_logits, losses, global_step):
