@@ -34,9 +34,6 @@ def build(hypes, q):
     Build full model for training, including forward / backward passes,
     optimizers, and summary statistics.
     '''
-    gpu_options = tf.GPUOptions()
-    config = tf.ConfigProto(gpu_options=gpu_options)
-    encoder_net = googlenet_load.init(hypes, config=config)
 
     learning_rate = tf.placeholder(tf.float32)
 
@@ -46,7 +43,7 @@ def build(hypes, q):
         images[phase], labels[phase] = data_input.inputs(hypes, q[phase])
 
         # Run inference on the encoder network
-        logits = encoder.inference(hypes, images[phase], encoder_net)
+        logits = encoder.inference(hypes, images[phase], phase)
 
         # Build decoder on top of the logits
         decoded_logits[phase] = objective.decoder(hypes, logits, phase)
@@ -68,8 +65,8 @@ def build(hypes, q):
 
     summary_op = tf.merge_all_summaries()
 
-    return (config, total_loss, accuracy, summary_op, train_op,
-            smooth_op, global_step, learning_rate, encoder_net)
+    return (total_loss, accuracy, summary_op, train_op,
+            smooth_op, global_step, learning_rate)
 
 
 def train(H, test_images):
@@ -88,8 +85,8 @@ def train(H, test_images):
     for phase in ['train', 'test']:
         q[phase] = data_input.create_queues(H, phase)
 
-    (config, loss, accuracy, summary_op, train_op,
-     smooth_op, global_step, learning_rate, encoder_net) = build(H, q)
+    (loss, accuracy, summary_op, train_op,
+     smooth_op, global_step, learning_rate) = build(H, q)
 
     saver = tf.train.Saver(max_to_keep=None)
     writer = tf.train.SummaryWriter(
@@ -97,7 +94,7 @@ def train(H, test_images):
         flush_secs=10
     )
 
-    with tf.Session(config=config) as sess:
+    with tf.Session() as sess:
         tf.train.start_queue_runners(sess=sess)
         for phase in ['train', 'test']:
             # enqueue once manually to avoid thread start delay
