@@ -52,13 +52,8 @@ def build(hypes, q):
         decoded_logits[phase] = objective.decoder(hypes, logits, phase)
 
         # Compute losses
-        pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss \
-            = objective.loss(hypes, decoded_logits[phase],
-                             labels[phase], phase)
-
-        # Resummaryze tensors
-        losses[phase] = loss, confidences_loss, boxes_loss
-        decoded_logits[phase] = pred_confidences, pred_boxes
+        losses[phase] = objective.loss(hypes, decoded_logits[phase],
+                                       labels[phase], phase)
 
     total_loss = losses['train'][0]
     global_step = tf.Variable(0, trainable=False)

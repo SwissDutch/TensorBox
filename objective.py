@@ -6,8 +6,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import ipdb
-
 import os
 import numpy as np
 import scipy as scp
@@ -252,14 +250,29 @@ def decoder(hyp, logits, phase):
                                                     [outer_size, 1,
                                                      hyp['num_classes']]))
             pred_confs_deltas = tf.concat(1, pred_confs_deltas)
+
+            # moved from loss
+            pred_confs_deltas = tf.reshape(pred_confs_deltas,
+                                           [outer_size * hyp['rnn_len'],
+                                            hyp['num_classes']])
+
+            pred_logits_squash = tf.reshape(pred_confs_deltas,
+                                            [outer_size * hyp['rnn_len'],
+                                             hyp['num_classes']])
+            pred_confidences_squash = tf.nn.softmax(pred_logits_squash)
+            pred_confidences = tf.reshape(pred_confidences_squash,
+                                          [outer_size, hyp['rnn_len'],
+                                           hyp['num_classes']])
             if hyp['reregress']:
                 pred_boxes_deltas = tf.concat(1, pred_boxes_deltas)
-            logits = pred_boxes, pred_logits, pred_confidences,\
-                pred_confs_deltas, pred_boxes_deltas
+        else:
+            pred_confs_deltas = None
+            pred_boxes_deltas = None
 
-            return logits
+    logits = pred_boxes, pred_logits, pred_confidences,\
+        pred_confs_deltas, pred_boxes_deltas
 
-    return pred_boxes, pred_logits, pred_confidences
+    return logits
 
 
 def loss(hypes, decoded_logits, labels, phase):
@@ -275,11 +288,8 @@ def loss(hypes, decoded_logits, labels, phase):
 
     flags, confidences, boxes = labels
 
-    if hypes['use_rezoom']:
-        (pred_boxes, pred_logits, pred_confidences,
-         pred_confs_deltas, pred_boxes_deltas) = decoded_logits
-    else:
-        pred_boxes, pred_logits, pred_confidences = decoded_logits
+    (pred_boxes, pred_logits, pred_confidences,
+     pred_confs_deltas, pred_boxes_deltas) = decoded_logits
 
     grid_size = hypes['grid_width'] * hypes['grid_height']
     outer_size = grid_size * hypes['batch_size']
@@ -335,23 +345,13 @@ def loss(hypes, decoded_logits, labels, phase):
         else:
             assert not hypes['rezoom_change_loss']
             inside = tf.reshape(tf.to_int64((tf.greater(classes, 0))), [-1])
-        new_confs = tf.reshape(
-            pred_confs_deltas, [outer_size * hypes['rnn_len'],
-                                hypes['num_classes']])
 
         cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            new_confs, inside)
+            pred_confs_deltas, inside)
 
         delta_confs_loss = tf.reduce_sum(cross_entropy) \
             / outer_size * hypes['solver']['head_weights'][0] * 0.1
 
-        pred_logits_squash = tf.reshape(new_confs,
-                                        [outer_size * hypes['rnn_len'],
-                                         hypes['num_classes']])
-        pred_confidences_squash = tf.nn.softmax(pred_logits_squash)
-        pred_confidences = tf.reshape(pred_confidences_squash,
-                                      [outer_size, hypes['rnn_len'],
-                                       hypes['num_classes']])
         loss = confidences_loss + boxes_loss + delta_confs_loss
         if hypes['reregress']:
             delta_unshaped = perm_truth - (pred_boxes + pred_boxes_deltas)
@@ -375,7 +375,7 @@ def loss(hypes, decoded_logits, labels, phase):
     else:
         loss = confidences_loss + boxes_loss
 
-    return pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss
+    return loss, confidences_loss, boxes_loss
 
 
 def evaluation(hyp, images, labels, decoded_logits, losses, global_step):
@@ -388,14 +388,8 @@ def evaluation(hyp, images, labels, decoded_logits, losses, global_step):
         flags, confidences, boxes = labels[phase]
         loss[phase], confidences_loss[phase], boxes_loss[phase] = losses[phase]
 
-        pred_confidences, pred_boxes = decoded_logits[phase]
-        """
-        if hyp['use_rezoom']:
-            (pred_boxes, pred_logits, pred_confidences,
-             pred_confs_deltas, pred_boxes_deltas) = decoded_logits[phase]
-        else:
-            pred_boxes, pred_logits, pred_confidences = decoded_logits[phase]
-        """
+        (pred_boxes, pred_logits, pred_confidences,
+         pred_confs_deltas, pred_boxes_deltas) = decoded_logits[phase]
 
         grid_size = hyp['grid_width'] * hyp['grid_height']
 
