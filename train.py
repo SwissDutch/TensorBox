@@ -9,10 +9,7 @@ import os
 from scipy import misc
 import tensorflow as tf
 import numpy as np
-try:
-    from tensorflow.models.rnn import rnn_cell
-except ImportError:
-    rnn_cell = tf.nn.rnn_cell
+
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import array_ops
 
@@ -32,179 +29,51 @@ def _hungarian_grad(op, *args):
     return map(array_ops.zeros_like, op.inputs)
 
 
-def build_lstm_inner(H, lstm_input):
-    '''
-    build lstm decoder
-    '''
-    lstm_cell = rnn_cell.BasicLSTMCell(H['lstm_size'], forget_bias=0.0)
-    if H['num_lstm_layers'] > 1:
-        lstm = rnn_cell.MultiRNNCell([lstm_cell] * H['num_lstm_layers'])
-    else:
-        lstm = lstm_cell
-
-    batch_size = H['batch_size'] * H['grid_height'] * H['grid_width']
-    state = tf.zeros([batch_size, lstm.state_size])
-
-    outputs = []
-    with tf.variable_scope('RNN', initializer=tf.random_uniform_initializer(-0.1, 0.1)):
-        for time_step in range(H['rnn_len']):
-            if time_step > 0: tf.get_variable_scope().reuse_variables()
-            output, state = lstm(lstm_input, state)
-            outputs.append(output)
-    return outputs
-
-def build_overfeat_inner(H, lstm_input):
-    '''
-    build simple overfeat decoder
-    '''
-    if H['rnn_len'] > 1:
-        raise ValueError('rnn_len > 1 only supported with use_lstm == True')
-    outputs = []
-    initializer = tf.random_uniform_initializer(-0.1, 0.1)
-    with tf.variable_scope('Overfeat', initializer=initializer):
-        w = tf.get_variable('ip', shape=[1024, H['lstm_size']])
-        outputs.append(tf.matmul(lstm_input, w))
-    return outputs
-
-def deconv(x, output_shape, channels):
-    k_h = 2
-    k_w = 2
-    w = tf.get_variable('w_deconv', initializer=tf.random_normal_initializer(stddev=0.01),
-                        shape=[k_h, k_w, channels[1], channels[0]])
-    y = tf.nn.conv2d_transpose(x, w, output_shape, strides=[1, k_h, k_w, 1], padding='VALID')
-    return y
-
-def rezoom(H, pred_boxes, early_feat, early_feat_channels, w_offsets, h_offsets):
-    '''
-    Rezoom into a feature map at multiple interpolation points in a grid. 
-
-    If the predicted object center is at X, len(w_offsets) == 3, and len(h_offsets) == 5,
-    the rezoom grid will look as follows:
-
-    [o o o]
-    [o o o]
-    [o X o]
-    [o o o]
-    [o o o]
-
-    Where each letter indexes into the feature map with bilinear interpolation
-    '''
-
-
-    grid_size = H['grid_width'] * H['grid_height']
-    outer_size = grid_size * H['batch_size']
-    indices = []
-    for w_offset in w_offsets:
-        for h_offset in h_offsets:
-            indices.append(train_utils.bilinear_select(H,
-                                                       pred_boxes,
-                                                       early_feat,
-                                                       early_feat_channels,
-                                                       w_offset, h_offset))
-
-    interp_indices = tf.concat(0, indices)
-    rezoom_features = train_utils.interp(early_feat,
-                                         interp_indices,
-                                         early_feat_channels)
-    rezoom_features_r = tf.reshape(rezoom_features,
-                                   [len(w_offsets) * len(h_offsets),
-                                    outer_size,
-                                    H['rnn_len'],
-                                    early_feat_channels])
-    rezoom_features_t = tf.transpose(rezoom_features_r, [1, 2, 0, 3])
-    return tf.reshape(rezoom_features_t,
-                      [outer_size,
-                       H['rnn_len'],
-                       len(w_offsets) * len(h_offsets) * early_feat_channels])
-
-def build_forward(H, x, googlenet, phase, reuse):
-    '''
-    Construct the forward model
-    '''
-
-    grid_size = H['grid_width'] * H['grid_height']
-    outer_size = grid_size * H['batch_size']
-
-    logits = encoder.inference(H, x, googlenet)
-    
-    return objective.decoder(H, logits, phase)
-
-def build_forward_backward(H, x, googlenet, phase, boxes, flags):
-    '''
-    Call build_forward() and then setup the loss functions
-    '''
-
-    grid_size = H['grid_width'] * H['grid_height']
-    outer_size = grid_size * H['batch_size']
-    reuse = {'train': None, 'test': True}[phase]
-
-    decoded_logits = build_forward(H, x, googlenet, phase, reuse)
-    labels = flags, None, boxes
-
-    pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss \
-     = objective.loss(H, decoded_logits, labels, phase)
-
-
-    return pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss
-
-def build(H, q):
+def build(hypes, q):
     '''
     Build full model for training, including forward / backward passes,
     optimizers, and summary statistics.
     '''
-    arch = H
-    solver = H["solver"]
-
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(solver['gpu'])
-
-    #gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=0.8)
     gpu_options = tf.GPUOptions()
     config = tf.ConfigProto(gpu_options=gpu_options)
-
-    encoder_net = googlenet_load.init(H, config)
+    encoder_net = googlenet_load.init(hypes, config=config)
 
     learning_rate = tf.placeholder(tf.float32)
 
-    labels, decoded_logits, losses, images = {}, {}, {}, {}
-    loss, accuracy, confidences_loss, boxes_loss = {}, {}, {}, {}
+    images, labels, decoded_logits, losses = {}, {}, {}, {}
     for phase in ['train', 'test']:
-        # generate predictions and losses from forward pass
-        x, confidences, boxes = q[phase].dequeue_many(arch['batch_size'])
-        flags = tf.argmax(confidences, 3)
+        # Load images and Labels
+        images[phase], labels[phase] = data_input.inputs(hypes, q[phase])
 
-        labels[phase] = flags, confidences, boxes
-        images[phase] = x
+        # Run inference on the encoder network
+        logits = encoder.inference(hypes, images[phase], encoder_net)
 
+        # Build decoder on top of the logits
+        decoded_logits[phase] = objective.decoder(hypes, logits, phase)
 
-        grid_size = H['grid_width'] * H['grid_height']
+        # Compute losses
+        pred_boxes, pred_confidences, loss, confidences_loss, boxes_loss \
+            = objective.loss(hypes, decoded_logits[phase],
+                             labels[phase], phase)
 
-        (pred_boxes, pred_confidences,
-         loss[phase], confidences_loss[phase],
-         boxes_loss[phase]) = build_forward_backward(H, x, encoder_net, phase, boxes, flags)
-        pred_confidences_r = tf.reshape(pred_confidences, [H['batch_size'], grid_size, H['rnn_len'], arch['num_classes']])
-        pred_boxes_r = tf.reshape(pred_boxes, [H['batch_size'], grid_size, H['rnn_len'], 4])
-
-        losses[phase] = loss[phase], confidences_loss[phase], boxes_loss[phase]
+        # Resummaryze tensors
+        losses[phase] = loss, confidences_loss, boxes_loss
         decoded_logits[phase] = pred_confidences, pred_boxes
 
+    total_loss = losses['train'][0]
+    global_step = tf.Variable(0, trainable=False)
 
-        # Set up summary operations for tensorboard
-        a = tf.equal(tf.argmax(confidences[:, :, 0, :], 2), tf.argmax(pred_confidences_r[:, :, 0, :], 2))
-        accuracy[phase] = tf.reduce_mean(tf.cast(a, 'float32'), name=phase+'/accuracy')
+    # Build training operation
+    train_op = optimizer.training(hypes, total_loss,
+                                  global_step, learning_rate)
 
-        if phase == 'train':
-            global_step = tf.Variable(0, trainable=False)
-
-            train_op = optimizer.training(H, loss['train'],
-                                          global_step, learning_rate)
-
-    accuracy, smooth_op = objective.evaluation(H, images,
-             labels, decoded_logits, losses, global_step)
-
+    # Write Values to summary
+    accuracy, smooth_op = objective.evaluation(
+        hypes, images, labels, decoded_logits, losses, global_step)
 
     summary_op = tf.merge_all_summaries()
 
-    return (config, loss, accuracy, summary_op, train_op,
+    return (config, total_loss, accuracy, summary_op, train_op,
             smooth_op, global_step, learning_rate, encoder_net)
 
 
@@ -249,7 +118,7 @@ def train(H, test_images):
 
         # train model for N iterations
         start = time.time()
-        max_iter = H['solver'].get('max_iter', 500)
+        max_iter = H['solver'].get('max_iter', 10000000)
         for i in xrange(max_iter):
             display_iter = H['logging']['display_iter']
             adjusted_lr = (H['solver']['learning_rate'] *
@@ -258,14 +127,14 @@ def train(H, test_images):
 
             if i % display_iter != 0:
                 # train network
-                batch_loss_train, _ = sess.run([loss['train'], train_op], feed_dict=lr_feed)
+                batch_loss_train, _ = sess.run([loss, train_op], feed_dict=lr_feed)
             else:
                 # test network every N iterations; log additional info
                 if i > 0:
                     dt = (time.time() - start) / (H['batch_size'] * display_iter)
                 start = time.time()
                 (train_loss, test_accuracy, summary_str,
-                    _, _) = sess.run([loss['train'], accuracy['test'],
+                    _, _) = sess.run([loss, accuracy['test'],
                                       summary_op, train_op, smooth_op,
                                      ], feed_dict=lr_feed)
                 writer.add_summary(summary_str, global_step=global_step.eval())
