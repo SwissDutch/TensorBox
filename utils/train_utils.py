@@ -18,7 +18,7 @@ def rescale_boxes(current_shape, anno, target_height, target_width):
         assert r.x1 < r.x2
         r.x1 *= x_scale
         r.x2 *= x_scale
-        assert r.x1 < r.x2
+        assert r.y1 < r.y2
         r.y1 *= y_scale
         r.y2 *= y_scale
     return anno
@@ -41,6 +41,9 @@ def load_idl_tf(idlfile, H, jitter):
         random.shuffle(annos)
         for anno in annos:
             I = imread(anno.imageName)
+	    #Skip Greyscale images
+            if len(I.shape) < 3:
+                continue	    
             if I.shape[2] == 4:
                 I = I[:, :, :3]
             if I.shape[0] != H["image_height"] or I.shape[1] != H["image_width"]:
@@ -92,7 +95,7 @@ def load_data_gen(H, phase, jitter):
         
         yield output
 
-def add_rectangles(H, orig_image, confidences, boxes, use_stitching=False, rnn_len=1, min_conf=0.1, show_removed=True, tau=0.25):
+def add_rectangles(H, orig_image, confidences, boxes, use_stitching=False, rnn_len=1, min_conf=0.1, show_removed=True, tau=0.25, show_suppressed=True):
     image = np.copy(orig_image[0])
     num_cells = H["grid_height"] * H["grid_width"]
     boxes_r = np.reshape(boxes, (-1,
@@ -126,7 +129,9 @@ def add_rectangles(H, orig_image, confidences, boxes, use_stitching=False, rnn_l
         acc_rects = all_rects_r
 
 
-    pairs = [(all_rects_r, (255, 0, 0)), (acc_rects, (0, 255, 0))]
+    pairs = [(acc_rects, (0, 255, 0))]
+    if show_suppressed:
+        pairs.append((all_rects_r, (255, 0, 0)))
     for rect_set, color in pairs:
         for rect in rect_set:
             if rect.confidence > min_conf:

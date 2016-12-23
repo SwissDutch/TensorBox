@@ -1,21 +1,21 @@
 <img src=http://russellsstewart.com/s/tensorbox/tensorbox_output.jpg></img>
 
+### Tensorflow == 0.11 supported by current version (Please report if you use >0.11 and get errors).
+
 TensorBox is a simple framework for training neural networks to detect objects in images. 
-Training requires a text file (see [here](http://russellsstewart.com/s/tensorbox/brainwash_test.txt), for example)
-of paths to images on disk and the corresponding object locations in each image.
+Training requires a json file (e.g. [here](http://russellsstewart.com/s/tensorbox/test_boxes.json))
+containing a list of images and the bounding boxes in each image.
 The basic model implements the simple and robust GoogLeNet-OverFeat algorithm. We additionally provide an implementation of the 
 [ReInspect](https://github.com/Russell91/ReInspect/)
-algorithm, reproducing state-of-the-art detection results on the highly occluded TUD crossing and brainwash datasets. 
-
-Special thanks to [Brett Kuprel](http://stanford.edu/~kuprel/) of Sebastian Thrun's group for providing the initial code
-to hack into Google's pretrained ImageNet weights for finetuning.
+algorithm, reproducing state-of-the-art detection results on the highly occluded TUD crossing and brainwash datasets.
 
 ## OverFeat Installation & Training
-First, [install TensorFlow from source or pip](https://www.tensorflow.org/versions/r0.7/get_started/os_setup.html#pip-installation)
+First, [install TensorFlow from source or pip](https://www.tensorflow.org/versions/r0.11/get_started/os_setup.html#pip-installation) (NB: source installs currently break threading on 0.11)
     
     $ git clone http://github.com/russell91/tensorbox
     $ cd tensorbox
     $ ./download_data.sh
+    $ cd /path/to/tensorbox/utils && make && cd ..
     $ python train.py --hypes hypes/overfeat_rezoom.json --gpu 0 --logdir output
 
 Note that running on your own dataset should only require modifying the `hypes/overfeat_rezoom.json` file. 
@@ -30,18 +30,16 @@ is a neural network extension to Overfeat-GoogLeNet in Tensorflow.
 It is designed for high performance object detection in images with heavily overlapping instances.
 See <a href="http://arxiv.org/abs/1506.04878" target="_blank">the paper</a> for details or the <a href="https://www.youtube.com/watch?v=QeWl0h3kQ24" target="_blank">video</a> for a demonstration.
 
+    # REQUIRES TENSORFLOW VERSION >= 0.8
     $ git clone http://github.com/russell91/tensorbox
     $ cd tensorbox
     $ ./download_data.sh
     
-    $ # Install tensorflow from source
-    $ git clone --recurse-submodules https://github.com/tensorflow/tensorflow
-    $ # Add code for the custom hungarian layer user_op
-    $ cp /path/to/tensorbox/utils/hungarian/hungarian.cc /path/to/tensorflow/tensorflow/core/user_ops/
-    $ # Proceed with the GPU installation of tensorflow from source...
-    $ # (see https://www.tensorflow.org/versions/r0.7/get_started/os_setup.html#installing-from-sources)
+    $ # Download the cudnn version used by your tensorflow verion and 
+    $ # put the libcudnn*.so files on your LD_LIBRARY_PATH e.g.
+    $ cp /path/to/appropriate/cudnn/lib64/* /usr/local/cuda/lib64
 
-    $ cd /path/to/tensorbox/utils && make && cd ..
+    $ cd /path/to/tensorbox/utils && make && make hungarian && cd ..
     $ python train.py --hypes hypes/lstm_rezoom.json --gpu 0 --logdir output
 
 ## Tensorboard
